@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { users, flags, type User, type InsertUser, type Flag, type InsertFlag } from "@shared/schema";
 import session from "express-session";
 import { drizzle } from "drizzle-orm/neon-http";
