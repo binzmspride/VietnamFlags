@@ -1,8 +1,11 @@
 import { users, flags, type User, type InsertUser, type Flag, type InsertFlag } from "@shared/schema";
 import session from "express-session";
-import createMemoryStore from "memorystore";
+import { drizzle } from "drizzle-orm/neon-http";
+import { neon } from "@neondatabase/serverless";
+import { eq } from "drizzle-orm";
+import connectPg from "connect-pg-simple";
 
-const MemoryStore = createMemoryStore(session);
+const PostgresSessionStore = connectPg(session);
 
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
@@ -16,103 +19,92 @@ export interface IStorage {
   deleteFlag(id: number, userId: number): Promise<boolean>;
   getFlag(id: number, userId: number): Promise<Flag | undefined>;
 
-  sessionStore: session.SessionStore;
+  sessionStore: any;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<number, User>;
-  private flags: Map<number, Flag>;
-  currentUserId: number;
-  currentFlagId: number;
-  sessionStore: session.SessionStore;
+// Initialize database connection
+const sql = neon(process.env.DATABASE_URL!);
+const db = drizzle(sql);
+
+export class DatabaseStorage implements IStorage {
+  sessionStore: any;
 
   constructor() {
-    this.users = new Map();
-    this.flags = new Map();
-    this.currentUserId = 1;
-    this.currentFlagId = 1;
-    this.sessionStore = new MemoryStore({
-      checkPeriod: 86400000,
+    this.sessionStore = new PostgresSessionStore({
+      conString: process.env.DATABASE_URL,
+      createTableIfMissing: true,
     });
   }
 
   async getUser(id: number): Promise<User | undefined> {
-    return this.users.get(id);
+    const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+    return result[0];
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
+    return result[0];
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.email === email,
-    );
+    const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    return result[0];
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = this.currentUserId++;
-    const user: User = { 
-      ...insertUser, 
-      id, 
-      createdAt: new Date() 
-    };
-    this.users.set(id, user);
-    return user;
+    const result = await db.insert(users).values(insertUser).returning();
+    return result[0];
   }
 
   async getUserFlags(userId: number): Promise<Flag[]> {
-    return Array.from(this.flags.values()).filter(
-      (flag) => flag.userId === userId
-    );
+    return await db.select().from(flags).where(eq(flags.userId, userId));
   }
 
   async createFlag(userId: number, insertFlag: InsertFlag): Promise<Flag> {
-    const id = this.currentFlagId++;
-    const flag: Flag = {
+    const result = await db.insert(flags).values({
       ...insertFlag,
-      id,
       userId,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-    this.flags.set(id, flag);
-    return flag;
+    }).returning();
+    return result[0];
   }
 
   async updateFlag(id: number, userId: number, flagData: Partial<InsertFlag>): Promise<Flag | undefined> {
-    const flag = this.flags.get(id);
-    if (!flag || flag.userId !== userId) {
-      return undefined;
-    }
+    const result = await db
+      .update(flags)
+      .set({ ...flagData, updatedAt: new Date() })
+      .where(eq(flags.id, id))
+      .returning();
     
-    const updatedFlag: Flag = {
-      ...flag,
-      ...flagData,
-      updatedAt: new Date()
-    };
-    this.flags.set(id, updatedFlag);
-    return updatedFlag;
+    // Check if the flag belongs to the user
+    if (result.length > 0 && result[0].userId === userId) {
+      return result[0];
+    }
+    return undefined;
   }
 
   async deleteFlag(id: number, userId: number): Promise<boolean> {
-    const flag = this.flags.get(id);
-    if (!flag || flag.userId !== userId) {
-      return false;
-    }
+    const result = await db
+      .delete(flags)
+      .where(eq(flags.id, id))
+      .returning();
     
-    return this.flags.delete(id);
+    // Check if the flag belonged to the user
+    return result.length > 0 && result[0].userId === userId;
   }
 
   async getFlag(id: number, userId: number): Promise<Flag | undefined> {
-    const flag = this.flags.get(id);
-    if (!flag || flag.userId !== userId) {
-      return undefined;
+    const result = await db
+      .select()
+      .from(flags)
+      .where(eq(flags.id, id))
+      .limit(1);
+    
+    // Check if the flag belongs to the user
+    if (result.length > 0 && result[0].userId === userId) {
+      return result[0];
     }
-    return flag;
+    return undefined;
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
