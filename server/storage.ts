@@ -1,8 +1,8 @@
 import "dotenv/config";
 import { users, flags, type User, type InsertUser, type Flag, type InsertFlag } from "@shared/schema";
 import session from "express-session";
-import { drizzle } from "drizzle-orm/neon-http";
-import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import { eq } from "drizzle-orm";
 import connectPg from "connect-pg-simple";
 
@@ -24,15 +24,17 @@ export interface IStorage {
 }
 
 // Initialize database connection
-const sql = neon(process.env.DATABASE_URL!);
-const db = drizzle(sql);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+const db = drizzle(pool);
 
 export class DatabaseStorage implements IStorage {
   sessionStore: any;
 
   constructor() {
     this.sessionStore = new PostgresSessionStore({
-      conString: process.env.DATABASE_URL,
+      pool: pool,
       createTableIfMissing: true,
     });
   }
